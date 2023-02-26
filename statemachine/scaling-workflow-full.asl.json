@@ -1,0 +1,553 @@
+{
+  "Comment": "AB2 scaling workflow",
+  "StartAt": "Scale Out Requested",
+  "States": {
+    "Scale Out Requested": {
+      "Type": "Parallel",
+      "Next": "Scale Out",
+      "Branches": [
+        {
+          "StartAt": "Scale Out Requested Event",
+          "States": {
+            "Scale Out Requested Event": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Parameters": {
+                "Entries": [
+                  {
+                    "Detail": {
+                      "Message": "Scale Out Requested",
+                      "scalingRequestId.$": "$.scalingRequestId"
+                    },
+                    "DetailType": "Ab2.ScalingWorkflow",
+                    "EventBusName": "Ab2EventBus",
+                    "Source": "ab2.scalingworkflow"
+                  }
+                ]
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Scale Out Requested DB Update",
+          "States": {
+            "Scale Out Requested DB Update": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "Ab2ScalingServiceDatabase",
+                "Key": {
+                  "scalingRequestId": {
+                    "S.$": "$.scalingRequestId"
+                  }
+                },
+                "UpdateExpression": "SET #statusKey = :statusValue",
+                "ExpressionAttributeNames": {
+                  "#statusKey": "status"
+                },
+                "ExpressionAttributeValues": {
+                  ":statusValue": {
+                    "S": "ScaleOutRequested"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null
+    },
+    "Scale Out": {
+      "Type": "Task",
+      "Parameters": {
+        "Service.$": "$.serviceArn",
+        "Cluster.$": "$.clusterArn",
+        "DesiredCount.$": "$.desiredCount"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:ecs:updateService",
+      "Next": "Scale Out Started",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Scale Out Failed"
+        }
+      ],
+      "ResultPath": null
+    },
+    "Scale Out Started": {
+      "Type": "Parallel",
+      "Next": "Wait Scale Out",
+      "Branches": [
+        {
+          "StartAt": "Scale Out Started Event",
+          "States": {
+            "Scale Out Started Event": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Parameters": {
+                "Entries": [
+                  {
+                    "Detail": {
+                      "Message": "Scale Out Started",
+                      "scalingRequestId.$": "$.scalingRequestId"
+                    },
+                    "DetailType": "ScalingWorkflow.ScaleOutStarted",
+                    "EventBusName": "Ab2EventBus",
+                    "Source": "ab2.scalingworkflow"
+                  }
+                ]
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Scale Out Started DB Update",
+          "States": {
+            "Scale Out Started DB Update": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "Ab2ScalingServiceDatabase",
+                "Key": {
+                  "scalingRequestId": {
+                    "S.$": "$.scalingRequestId"
+                  }
+                },
+                "UpdateExpression": "SET #statusKey = :statusValue",
+                "ExpressionAttributeNames": {
+                  "#statusKey": "status"
+                },
+                "ExpressionAttributeValues": {
+                  ":statusValue": {
+                    "S": "ScaleOutStarted"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null
+    },
+    "Wait Scale Out": {
+      "Type": "Wait",
+      "Next": "Check Scale Out",
+      "Seconds": 60
+    },
+    "Check Scale Out": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload": {
+          "desiredCount.$": "$.desiredCount"
+        },
+        "FunctionName": ""
+      },
+      "ResultSelector": {
+        "status.$": "$.Payload.body.status"
+      },
+      "ResultPath": "$.scaleOutStatus",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Scale Out Status"
+    },
+    "Scale Out Status": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.scaleOutStatus.status",
+          "StringEquals": "FAILED",
+          "Next": "Scale Out Failed"
+        },
+        {
+          "Variable": "$.scaleOutStatus.status",
+          "StringEquals": "SUCCEEDED",
+          "Next": "Scale Out Succeeded"
+        }
+      ],
+      "Default": "Wait Scale Out"
+    },
+    "Scale Out Succeeded": {
+      "Type": "Parallel",
+      "Next": "Wait Until",
+      "Branches": [
+        {
+          "StartAt": "Scale Out Succeeded Event",
+          "States": {
+            "Scale Out Succeeded Event": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Parameters": {
+                "Entries": [
+                  {
+                    "Detail": {
+                      "Message": "Scale Out Succeeded",
+                      "scalingRequestId.$": "$.scalingRequestId"
+                    },
+                    "DetailType": "Ab2.ScalingWorkflow",
+                    "EventBusName": "Ab2EventBus",
+                    "Source": "ab2.scalingworkflow"
+                  }
+                ]
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Scale Out Succeeded DB Update",
+          "States": {
+            "Scale Out Succeeded DB Update": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "Ab2ScalingServiceDatabase",
+                "Key": {
+                  "scalingRequestId": {
+                    "S.$": "$.scalingRequestId"
+                  }
+                },
+                "UpdateExpression": "SET #statusKey = :statusValue",
+                "ExpressionAttributeNames": {
+                  "#statusKey": "status"
+                },
+                "ExpressionAttributeValues": {
+                  ":statusValue": {
+                    "S": "ScaleOutSucceeded"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null
+    },
+    "Scale Out Failed": {
+      "Type": "Parallel",
+      "Next": "Scale Out Fail",
+      "Branches": [
+        {
+          "StartAt": "Scale Out Failed Event",
+          "States": {
+            "Scale Out Failed Event": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Parameters": {
+                "Entries": [
+                  {
+                    "Detail": {
+                      "Message": "Scale Out Failed",
+                      "scalingRequestId.$": "$.scalingRequestId"
+                    },
+                    "DetailType": "Ab2.ScalingWorkflow",
+                    "EventBusName": "Ab2EventBus",
+                    "Source": "ab2.scalingworkflow"
+                  }
+                ]
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Scale Out Failed DB Update",
+          "States": {
+            "Scale Out Failed DB Update": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "Ab2ScalingServiceDatabase",
+                "Key": {
+                  "scalingRequestId": {
+                    "S.$": "$.scalingRequestId"
+                  }
+                },
+                "UpdateExpression": "SET #statusKey = :statusValue",
+                "ExpressionAttributeNames": {
+                  "#statusKey": "status"
+                },
+                "ExpressionAttributeValues": {
+                  ":statusValue": {
+                    "S": "ScaleOutFailed"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null
+    },
+    "Wait Until": {
+      "Type": "Wait",
+      "Next": "Scale In",
+      "SecondsPath": "$.waitTime"
+    },
+    "Scale In": {
+      "Type": "Task",
+      "Parameters": {
+        "Service.$": "$.serviceArn",
+        "Cluster.$": "$.clusterArn",
+        "DesiredCount.$": "$.originalDesiredCount"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:ecs:updateService",
+      "ResultPath": null,
+      "Next": "Scale In Started",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Scale In Failed"
+        }
+      ]
+    },
+    "Scale In Started": {
+      "Type": "Parallel",
+      "Next": "Wait Scale In",
+      "Branches": [
+        {
+          "StartAt": "Scale In Started Event",
+          "States": {
+            "Scale In Started Event": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Parameters": {
+                "Entries": [
+                  {
+                    "Detail": {
+                      "Message": "Scale In Started",
+                      "scalingRequestId.$": "$.scalingRequestId"
+                    },
+                    "DetailType": "Ab2.ScalingWorkflow",
+                    "EventBusName": "Ab2EventBus",
+                    "Source": "ab2.scalingworkflow"
+                  }
+                ]
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Scale In Started DB Update",
+          "States": {
+            "Scale In Started DB Update": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "Ab2ScalingServiceDatabase",
+                "Key": {
+                  "scalingRequestId": {
+                    "S.$": "$.scalingRequestId"
+                  }
+                },
+                "UpdateExpression": "SET #statusKey = :statusValue",
+                "ExpressionAttributeNames": {
+                  "#statusKey": "status"
+                },
+                "ExpressionAttributeValues": {
+                  ":statusValue": {
+                    "S": "ScaleInStarted"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null
+    },
+    "Wait Scale In": {
+      "Type": "Wait",
+      "Seconds": 120,
+      "Next": "Check Scale In"
+    },
+    "Check Scale In": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload": {
+          "desiredCount.$": "$.originalDesiredCount"
+        },
+        "FunctionName": ""
+      },
+      "ResultSelector": {
+        "status.$": "$.Payload.body.status"
+      },
+      "ResultPath": "$.scaleInStatus",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Scale In Status"
+    },
+    "Scale In Status": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.scaleInStatus.status",
+          "StringEquals": "SUCCEEDED",
+          "Next": "Scale In Succeeded"
+        },
+        {
+          "Variable": "$.scaleInStatus.status",
+          "StringEquals": "FAILED",
+          "Next": "Scale In Failed"
+        }
+      ],
+      "Default": "Wait Scale In"
+    },
+    "Scale In Succeeded": {
+      "Type": "Parallel",
+      "Next": "Scaling Workflow Succeeded",
+      "Branches": [
+        {
+          "StartAt": "Scale In Succeeded Event",
+          "States": {
+            "Scale In Succeeded Event": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Parameters": {
+                "Entries": [
+                  {
+                    "Detail": {
+                      "Message": "Scale In Succeed",
+                      "scalingRequestId.$": "$.scalingRequestId"
+                    },
+                    "DetailType": "Ab2.ScalingWorkflow",
+                    "EventBusName": "Ab2EventBus",
+                    "Source": "ab2.scalingworkflow"
+                  }
+                ]
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Scale In Succeeded DB Update",
+          "States": {
+            "Scale In Succeeded DB Update": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "Ab2ScalingServiceDatabase",
+                "Key": {
+                  "scalingRequestId": {
+                    "S.$": "$.scalingRequestId"
+                  }
+                },
+                "UpdateExpression": "SET #statusKey = :statusValue",
+                "ExpressionAttributeNames": {
+                  "#statusKey": "status"
+                },
+                "ExpressionAttributeValues": {
+                  ":statusValue": {
+                    "S": "ScaleInSucceeded"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "Scale In Failed": {
+      "Type": "Parallel",
+      "Next": "Scale In Fail",
+      "Branches": [
+        {
+          "StartAt": "Scale In Failed Event",
+          "States": {
+            "Scale In Failed Event": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Parameters": {
+                "Entries": [
+                  {
+                    "Detail": {
+                      "Message": "Scale In Failed",
+                      "scalingRequestId.$": "$.scalingRequestId"
+                    },
+                    "DetailType": "Ab2.ScalingWorkflow",
+                    "EventBusName": "Ab2EventBus",
+                    "Source": "ab2.scalingworkflow"
+                  }
+                ]
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Scale In Failed DB Update",
+          "States": {
+            "Scale In Failed DB Update": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "Ab2ScalingServiceDatabase",
+                "Key": {
+                  "scalingRequestId": {
+                    "S.$": "$.scalingRequestId"
+                  }
+                },
+                "UpdateExpression": "SET #statusKey = :statusValue",
+                "ExpressionAttributeNames": {
+                  "#statusKey": "status"
+                },
+                "ExpressionAttributeValues": {
+                  ":statusValue": {
+                    "S": "ScaleInFailed"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "Scaling Workflow Succeeded": {
+      "Type": "Succeed"
+    },
+    "Scale Out Fail": {
+      "Type": "Fail"
+    },
+    "Scale In Fail": {
+      "Type": "Fail"
+    }
+  }
+}
